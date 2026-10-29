@@ -32,6 +32,22 @@ private fun <T> next(options: List<T>, current: T): T {
 
 internal fun onOff(b: Boolean) = if (b) "An" else "Aus"
 
+private fun zoomLabel(percent: Int) =
+    "bis " + "%.1f".format(percent / 100f).replace('.', ',') + "×"
+
+private fun speedLabel(percent: Int) = when (percent) {
+    100 -> "Langsam (ganze Anzeigedauer)"
+    70 -> "Mittel"
+    50 -> "Schnell"
+    else -> "Sehr schnell"
+}
+
+private fun daysLabel(days: Int) = when (days) {
+    0 -> "Aus"
+    1 -> "1 Tag"
+    else -> "$days Tage"
+}
+
 internal fun folderLabel(path: String): String =
     path.split("/").filter { it.isNotEmpty() }.takeLast(2).joinToString("/")
 
@@ -88,8 +104,23 @@ fun SettingsScreen(
             }
         }
         item {
+            SettingRow("Zoom-Stärke", zoomLabel(settings.zoomMaxPercent)) {
+                onChange(settings.copy(zoomMaxPercent = next(ZOOM_MAX_OPTIONS, settings.zoomMaxPercent)))
+            }
+        }
+        item {
+            SettingRow("Zoom-Geschwindigkeit", speedLabel(settings.zoomSpeedPercent)) {
+                onChange(settings.copy(zoomSpeedPercent = next(ZOOM_SPEED_OPTIONS, settings.zoomSpeedPercent)))
+            }
+        }
+        item {
             SettingRow("Reihenfolge der Bilder", if (settings.shuffleImages) "Zufällig" else "Nach Ordner und Name") {
                 onChange(settings.copy(shuffleImages = !settings.shuffleImages))
+            }
+        }
+        item {
+            SettingRow("Bilder nicht wiederholen (innerhalb von)", daysLabel(settings.noRepeatDays)) {
+                onChange(settings.copy(noRepeatDays = next(NO_REPEAT_OPTIONS, settings.noRepeatDays)))
             }
         }
 

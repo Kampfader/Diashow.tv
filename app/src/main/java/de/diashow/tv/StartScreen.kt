@@ -29,11 +29,16 @@ fun StartScreen(
     disabled: Set<String>,
     imageCount: Int,
     videoCount: Int,
+    info: String?,
+    noRepeatDays: Int,
+    recentCount: Int,
     onDisabledChange: (Set<String>) -> Unit,
+    onResetHistory: () -> Unit,
     onStart: (PlayMode) -> Unit,
 ) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { first.requestFocus() }
+    val newSuffix = if (noRepeatDays > 0) " (neu)" else ""
 
     LazyColumn(
         modifier = Modifier
@@ -50,12 +55,19 @@ fun StartScreen(
                     color = Color(0xFFAAAAAA), fontSize = 16.sp,
                     modifier = Modifier.padding(top = 6.dp)
                 )
+                if (info != null) {
+                    Text(
+                        info,
+                        color = Color(0xFFFFD166), fontSize = 18.sp,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+                }
             }
         }
 
         item { Header("Starten") }
         item {
-            SettingRow("▶  Bilder-Diashow starten", "$imageCount Bilder", Modifier.focusRequester(first)) {
+            SettingRow("▶  Bilder-Diashow starten", "$imageCount Bilder$newSuffix", Modifier.focusRequester(first)) {
                 if (imageCount > 0) onStart(PlayMode.IMAGES)
             }
         }
@@ -67,6 +79,11 @@ fun StartScreen(
         item {
             SettingRow("▶  Bilder und Videos gemischt", "${imageCount + videoCount} Dateien") {
                 if (imageCount + videoCount > 0) onStart(PlayMode.MIXED)
+            }
+        }
+        if (noRepeatDays > 0) {
+            item {
+                SettingRow("Gezeigte Bilder zurücksetzen", "$recentCount gemerkt") { onResetHistory() }
             }
         }
 

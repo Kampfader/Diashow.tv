@@ -18,9 +18,19 @@ private class FocusResult(val focus: FaceFocus?)
 /**
  * Zeigt ein Bild mit langsamem Zoom. Mit faceZoom wird auf die erkannten Gesichter gezoomt
  * (das Gesicht wandert dabei Richtung Bildmitte), sonst sanft in die Bildmitte.
+ *
+ * zoomMax: größte Vergrößerung (z. B. 1,6 = 160 %)
+ * speedFraction: Anteil der Anzeigedauer, in dem der Zoom abläuft (1,0 = ganze Dauer, 0,5 = erste Hälfte)
  */
 @Composable
-fun ZoomImage(file: File, durationMs: Int, zoomEnabled: Boolean, faceZoom: Boolean) {
+fun ZoomImage(
+    file: File,
+    durationMs: Int,
+    zoomEnabled: Boolean,
+    faceZoom: Boolean,
+    zoomMax: Float,
+    speedFraction: Float,
+) {
     val context = LocalContext.current
     val searchFaces = zoomEnabled && faceZoom
 
@@ -34,7 +44,8 @@ fun ZoomImage(file: File, durationMs: Int, zoomEnabled: Boolean, faceZoom: Boole
     val progress = remember(file) { Animatable(0f) }
     LaunchedEffect(file, zoomEnabled, result != null) {
         if (zoomEnabled && result != null) {
-            progress.animateTo(1f, tween(durationMs, easing = LinearEasing))
+            val ms = (durationMs * speedFraction).toInt().coerceAtLeast(500)
+            progress.animateTo(1f, tween(ms, easing = LinearEasing))
         }
     }
 
@@ -53,13 +64,14 @@ fun ZoomImage(file: File, durationMs: Int, zoomEnabled: Boolean, faceZoom: Boole
 
                 if (f == null) {
                     // keine Gesichter: sanfter Zoom in die Bildmitte
-                    val s = 1f + 0.12f * p
+                    val s = 1f + (zoomMax - 1f) * 0.2f * p
                     scaleX = s
                     scaleY = s
                     return@graphicsLayer
                 }
 
-                val endScale = (0.5f / maxOf(f.w, f.h)).coerceIn(1.15f, 1.6f)
+                // Je kleiner der Gesichtsbereich, desto näher; höchstens zoomMax
+                val endScale = (0.5f / maxOf(f.w, f.h)).coerceIn(1f + (zoomMax - 1f) * 0.4f, zoomMax)
                 val s = 1f + (endScale - 1f) * p
 
                 // Bereich, den das Bild bei ContentScale.Fit auf dem Bildschirm belegt

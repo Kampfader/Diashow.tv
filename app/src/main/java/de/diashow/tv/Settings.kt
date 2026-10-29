@@ -6,6 +6,9 @@ data class Settings(
     val imageSeconds: Int = 8,
     val zoomEnabled: Boolean = true,
     val faceZoom: Boolean = true,
+    val zoomMaxPercent: Int = 160,
+    val zoomSpeedPercent: Int = 100,
+    val noRepeatDays: Int = 0,
     val transitionMs: Int = 800,
     val shuffleImages: Boolean = false,
     val shuffleVideos: Boolean = false,
@@ -19,6 +22,9 @@ data class Settings(
 )
 
 val IMAGE_SECONDS_OPTIONS = listOf(3, 5, 8, 10, 15, 30, 60)
+val ZOOM_MAX_OPTIONS = listOf(110, 130, 160, 200, 250)
+val ZOOM_SPEED_OPTIONS = listOf(100, 70, 50, 30)
+val NO_REPEAT_OPTIONS = listOf(0, 1, 3, 7, 14, 30, 90, 365)
 val TRANSITION_OPTIONS = listOf(0, 500, 800, 1500, 3000)
 val VOLUME_OPTIONS = listOf(10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
 
@@ -31,6 +37,9 @@ class SettingsStore(context: Context) {
             imageSeconds = prefs.getInt("imageSeconds", d.imageSeconds),
             zoomEnabled = prefs.getBoolean("zoomEnabled", d.zoomEnabled),
             faceZoom = prefs.getBoolean("faceZoom", d.faceZoom),
+            zoomMaxPercent = prefs.getInt("zoomMaxPercent", d.zoomMaxPercent),
+            zoomSpeedPercent = prefs.getInt("zoomSpeedPercent", d.zoomSpeedPercent),
+            noRepeatDays = prefs.getInt("noRepeatDays", d.noRepeatDays),
             transitionMs = prefs.getInt("transitionMs", d.transitionMs),
             // "shuffleVisual" war der Name in der vorigen Version
             shuffleImages = prefs.getBoolean("shuffleImages", prefs.getBoolean("shuffleVisual", d.shuffleImages)),
@@ -50,6 +59,9 @@ class SettingsStore(context: Context) {
             .putInt("imageSeconds", s.imageSeconds)
             .putBoolean("zoomEnabled", s.zoomEnabled)
             .putBoolean("faceZoom", s.faceZoom)
+            .putInt("zoomMaxPercent", s.zoomMaxPercent)
+            .putInt("zoomSpeedPercent", s.zoomSpeedPercent)
+            .putInt("noRepeatDays", s.noRepeatDays)
             .putInt("transitionMs", s.transitionMs)
             .putBoolean("shuffleImages", s.shuffleImages)
             .putBoolean("shuffleVideos", s.shuffleVideos)

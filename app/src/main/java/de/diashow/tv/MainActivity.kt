@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
             val store = remember { SettingsStore(this@MainActivity) }
             var settings by remember { mutableStateOf(store.load()) }
             fun update(s: Settings) { settings = s; store.save(s) }
+            val shownStore = remember { ShownStore(this@MainActivity) }
 
             var granted by remember { mutableStateOf(hasPermission()) }
             val launcher = rememberLauncherForActivityResult(
@@ -49,6 +50,9 @@ class MainActivity : ComponentActivity() {
             var status by remember { mutableStateOf("Suche USB-Stick …") }
             var duck by remember { mutableStateOf(false) }
             var playMode by remember { mutableStateOf<PlayMode?>(null) }
+            var slideIndex by remember { mutableIntStateOf(0) }
+            var startInfo by remember { mutableStateOf<String?>(null) }
+            var historyReset by remember { mutableIntStateOf(0) }
 
             LaunchedEffect(Unit) {
                 if (!granted) launcher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -99,17 +103,26 @@ class MainActivity : ComponentActivity() {
             val selected = remember(lib, settings.disabledFolders) {
                 lib?.visual.orEmpty().filter { (it.parentFile?.absolutePath ?: "") !in settings.disabledFolders }
             }
-            val imageCount = selected.count { !MediaScanner.isVideo(it) }
-            val videoCount = selected.size - imageCount
+
+            // Bilder, die in den letzten Tagen schon gezeigt wurden. Wird nur beim Wechsel zwischen
+            // Startbildschirm und Diashow neu gelesen, damit sich die Liste während der Show nicht ändert.
+            val recent = remember(lib, settings.noRepeatDays, playMode, historyReset) {
+                if (settings.noRepeatDays > 0) shownStore.recentPaths(settings.noRepeatDays) else emptySet()
+            }
+            val avail = remember(selected, recent) {
+                selected.filter { MediaScanner.isVideo(it) || it.absolutePath !in recent }
+            }
+            val imageCount = avail.count { !MediaScanner.isVideo(it) }
+            val videoCount = avail.size - imageCount
 
             // Wiedergabeliste je nach gewähltem Modus
-            val items = remember(playMode, selected, settings.shuffleImages, settings.shuffleVideos) {
+            val items = remember(playMode, avail, settings.shuffleImages, settings.shuffleVideos) {
                 when (playMode) {
-                    PlayMode.IMAGES -> selected.filter { !MediaScanner.isVideo(it) }
+                    PlayMode.IMAGES -> avail.filter { !MediaScanner.isVideo(it) }
                         .let { if (settings.shuffleImages) it.shuffled() else it }
-                    PlayMode.VIDEOS -> selected.filter { MediaScanner.isVideo(it) }
+                    PlayMode.VIDEOS -> avail.filter { MediaScanner.isVideo(it) }
                         .let { if (settings.shuffleVideos) it.shuffled() else it }
-                    PlayMode.MIXED -> selected.let { if (settings.shuffleImages) it.shuffled() else it }
+                    PlayMode.MIXED -> avail.let { if (settings.shuffleImages) it.shuffled() else it }
                     null -> emptyList()
                 }
             }
@@ -136,17 +149,39 @@ class MainActivity : ComponentActivity() {
                     disabled = settings.disabledFolders,
                     imageCount = imageCount,
                     videoCount = videoCount,
+                    info = startInfo,
+                    noRepeatDays = settings.noRepeatDays,
+                    recentCount = recent.size,
                     onDisabledChange = { update(settings.copy(disabledFolders = it)) },
-                    onStart = { playMode = it },
+                    onResetHistory = {
+                        shownStore.clear()
+                        historyReset++
+                        startInfo = null
+                    },
+                    onStart = {
+                        slideIndex = 0
+                        startInfo = null
+                        playMode = it
+                    },
                 )
                 else -> SlideshowScreen(
                     items = items,
+                    initialIndex = slideIndex,
+                    onIndexChange = { slideIndex = it },
                     imageSeconds = settings.imageSeconds.toLong(),
                     transitionMs = settings.transitionMs,
                     videoSound = settings.videoSound,
                     autoRotate = settings.autoRotate,
                     zoomEnabled = settings.zoomEnabled,
                     faceZoom = settings.faceZoom,
+                    zoomMaxPercent = settings.zoomMaxPercent,
+                    zoomSpeedPercent = settings.zoomSpeedPercent,
+                    finishAtEnd = settings.noRepeatDays > 0 && playMode != PlayMode.VIDEOS,
+                    onImageShown = { shownStore.markShown(it.absolutePath) },
+                    onFinished = {
+                        startInfo = "Alle Bilder wurden gezeigt. Die Diashow ist zu Ende."
+                        playMode = null
+                    },
                     audioLabel = if (settings.musicEnabled && sources.isNotEmpty())
                         sources[settings.audioSourceIndex % sources.size].label else "Musik aus",
                     onCycleAudio = {

@@ -18,7 +18,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -27,7 +26,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.ui.PlayerView
-import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -36,18 +34,25 @@ import java.io.File
 @Composable
 fun SlideshowScreen(
     items: List<File>,
+    initialIndex: Int,
+    onIndexChange: (Int) -> Unit,
     imageSeconds: Long,
     transitionMs: Int,
     videoSound: Boolean,
     autoRotate: Boolean,
     zoomEnabled: Boolean,
     faceZoom: Boolean,
+    zoomMaxPercent: Int,
+    zoomSpeedPercent: Int,
+    finishAtEnd: Boolean,
+    onImageShown: (File) -> Unit,
+    onFinished: () -> Unit,
     audioLabel: String,
     onCycleAudio: () -> Unit,
     onVideoActive: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
-    var index by remember { mutableIntStateOf(0) }
+    var index by remember { mutableIntStateOf(initialIndex.coerceIn(0, items.lastIndex)) }
     var paused by remember { mutableStateOf(false) }
     var labelVisible by remember { mutableStateOf(true) }
     var rotationHint by remember { mutableStateOf<String?>(null) }
@@ -60,7 +65,12 @@ fun SlideshowScreen(
 
     val current = items[index.coerceIn(0, items.lastIndex)]
     val isVideo = MediaScanner.isVideo(current)
-    fun next() { index = (index + 1) % items.size }
+
+    // Am Ende der Liste: entweder von vorn beginnen oder (bei "nicht wiederholen") beenden
+    fun next() {
+        if (finishAtEnd && index >= items.lastIndex) onFinished()
+        else index = (index + 1) % items.size
+    }
 
     fun rotateCurrent(delta: Int) {
         if (!isVideo) return
@@ -71,6 +81,8 @@ fun SlideshowScreen(
     }
 
     LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(index) { onIndexChange(index) }
+    LaunchedEffect(current) { if (!MediaScanner.isVideo(current)) onImageShown(current) }
     // Hinweis beim Start, bei Musikwechsel und bei jedem neuen Video
     LaunchedEffect(audioLabel, if (isVideo) current else null) {
         labelVisible = true; delay(4000); labelVisible = false
@@ -107,9 +119,18 @@ fun SlideshowScreen(
     ) {
         Crossfade(targetState = current, animationSpec = tween(transitionMs), label = "slide") { file ->
             if (MediaScanner.isVideo(file)) {
-                VideoPlayer(file, videoSound, items.size == 1, rotationOf(file), autoRotate) { next() }
+                VideoPlayer(
+                    file, videoSound, items.size == 1 && !finishAtEnd, rotationOf(file), autoRotate
+                ) { next() }
             } else {
-                ZoomImage(file, (imageSeconds * 1000).toInt() + transitionMs, zoomEnabled, faceZoom)
+                ZoomImage(
+                    file = file,
+                    durationMs = (imageSeconds * 1000).toInt() + transitionMs,
+                    zoomEnabled = zoomEnabled,
+                    faceZoom = faceZoom,
+                    zoomMax = zoomMaxPercent / 100f,
+                    speedFraction = zoomSpeedPercent / 100f,
+                )
             }
         }
         if (labelVisible) {

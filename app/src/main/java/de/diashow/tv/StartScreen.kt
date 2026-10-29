@@ -1,22 +1,24 @@
 package de.diashow.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 enum class PlayMode { IMAGES, VIDEOS, MIXED }
 
@@ -37,10 +39,24 @@ fun StartScreen(
     onStart: (PlayMode) -> Unit,
 ) {
     val first = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var isFirstItemFocused by remember { mutableStateOf(true) }
+
     LaunchedEffect(Unit) { first.requestFocus() }
     val newSuffix = if (noRepeatDays > 0) " (neu)" else ""
 
+    // Wenn nicht ganz oben oder das erste Element nicht fokussiert ist: Zurück-Taste springt nach oben
+    val isAtTopAndFocused = isFirstItemFocused && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+    BackHandler(enabled = !isAtTopAndFocused) {
+        scope.launch {
+            listState.scrollToItem(0)
+            first.requestFocus()
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF101010))
@@ -67,7 +83,12 @@ fun StartScreen(
 
         item { Header("Starten") }
         item {
-            SettingRow("▶  Bilder-Diashow starten", "$imageCount Bilder$newSuffix", Modifier.focusRequester(first)) {
+            SettingRow(
+                "▶  Bilder-Diashow starten", "$imageCount Bilder$newSuffix",
+                Modifier
+                    .focusRequester(first)
+                    .onFocusChanged { isFirstItemFocused = it.isFocused }
+            ) {
                 if (imageCount > 0) onStart(PlayMode.IMAGES)
             }
         }
@@ -89,10 +110,10 @@ fun StartScreen(
 
         item { Header("Ordner auswählen") }
         item {
-            SettingRow("Alle Ordner auswählen", "${folders.size} Ordner") { onDisabledChange(emptySet()) }
+            SettingRow("Alle Ordner Einschalten", "${folders.size} Ordner") { onDisabledChange(emptySet()) }
         }
         item {
-            SettingRow("Alle Ordner abwählen", "") { onDisabledChange(folders.map { it.path }.toSet()) }
+            SettingRow("Alle Ordner Ausschalten", "") { onDisabledChange(folders.map { it.path }.toSet()) }
         }
         items(count = folders.size, key = { folders[it].path }) { i ->
             val f = folders[i]

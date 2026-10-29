@@ -1,12 +1,19 @@
 package de.diashow.tv
 
+import android.graphics.SurfaceTexture
+import android.media.ExifInterface
+import android.media.MediaPlayer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.view.LayoutInflater
+import android.view.Surface
+import android.view.TextureView
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -19,7 +26,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -30,6 +39,34 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+@Composable
+private fun rememberFormattedDate(file: File): String? {
+    return produceState<String?>(initialValue = null, file) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val exif = ExifInterface(file.absolutePath)
+                val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+
+                if (!dateStr.isNullOrBlank()) {
+                    val inFormat = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.getDefault())
+                    val outFormat = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+                    inFormat.parse(dateStr)?.let { outFormat.format(it) }
+                } else if (file.lastModified() > 0) {
+                    SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(file.lastModified()))
+                } else null
+            } catch (e: Exception) {
+                if (file.lastModified() > 0) {
+                    SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(file.lastModified()))
+                } else null
+            }
+        }
+    }.value
+}
 
 @Composable
 fun SlideshowScreen(
@@ -44,9 +81,13 @@ fun SlideshowScreen(
     faceZoom: Boolean,
     zoomMaxPercent: Int,
     zoomSpeedPercent: Int,
+    showFileName: Boolean,
+    showDate: Boolean,
+    textSizePercent: Int,
     finishAtEnd: Boolean,
     onImageShown: (File) -> Unit,
     onFinished: () -> Unit,
+    onSourceLost: () -> Unit,
     audioLabel: String,
     onCycleAudio: () -> Unit,
     onVideoActive: (Boolean) -> Unit,
@@ -56,9 +97,9 @@ fun SlideshowScreen(
     var paused by remember { mutableStateOf(false) }
     var labelVisible by remember { mutableStateOf(true) }
     var rotationHint by remember { mutableStateOf<String?>(null) }
+    var errorStreak by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
 
-    // Manuelle Zusatzdrehung als Korrektur (zusätzlich zur automatischen Drehung)
     val rotationStore = remember { RotationStore(context) }
     val rotations = remember { mutableStateMapOf<String, Int>() }
     fun rotationOf(f: File): Int = rotations[f.absolutePath] ?: rotationStore.get(f.absolutePath)
@@ -66,7 +107,8 @@ fun SlideshowScreen(
     val current = items[index.coerceIn(0, items.lastIndex)]
     val isVideo = MediaScanner.isVideo(current)
 
-    // Am Ende der Liste: entweder von vorn beginnen oder (bei "nicht wiederholen") beenden
+    val formattedDate = if (showDate) rememberFormattedDate(current) else null
+
     fun next() {
         if (finishAtEnd && index >= items.lastIndex) onFinished()
         else index = (index + 1) % items.size
@@ -82,8 +124,11 @@ fun SlideshowScreen(
 
     LaunchedEffect(Unit) { focus.requestFocus() }
     LaunchedEffect(index) { onIndexChange(index) }
+    LaunchedEffect(current) {
+        val exists = withContext(Dispatchers.IO) { current.exists() }
+        if (!exists) onSourceLost()
+    }
     LaunchedEffect(current) { if (!MediaScanner.isVideo(current)) onImageShown(current) }
-    // Hinweis beim Start, bei Musikwechsel und bei jedem neuen Video
     LaunchedEffect(audioLabel, if (isVideo) current else null) {
         labelVisible = true; delay(4000); labelVisible = false
     }
@@ -91,6 +136,7 @@ fun SlideshowScreen(
         if (rotationHint != null) { delay(2500); rotationHint = null }
     }
     LaunchedEffect(isVideo, videoSound) { onVideoActive(isVideo && videoSound) }
+
     LaunchedEffect(index, paused) {
         if (!isVideo && !paused) {
             delay(imageSeconds * 1000)
@@ -119,9 +165,33 @@ fun SlideshowScreen(
     ) {
         Crossfade(targetState = current, animationSpec = tween(transitionMs), label = "slide") { file ->
             if (MediaScanner.isVideo(file)) {
-                VideoPlayer(
-                    file, videoSound, items.size == 1 && !finishAtEnd, rotationOf(file), autoRotate
-                ) { next() }
+                val ext = file.extension.lowercase()
+                if (ext == "avi" || ext == "wmv" || ext == "asf" || ext == "mov") {
+                    LegacyAviPlayer(
+                        file = file,
+                        withSound = videoSound,
+                        loop = items.size == 1 && !finishAtEnd,
+                        rotation = rotationOf(file),
+                        isPaused = paused,
+                        onError = {
+                            errorStreak++
+                            if (errorStreak >= 3 || !file.exists()) onSourceLost() else next()
+                        }
+                    ) { errorStreak = 0; next() }
+                } else {
+                    VideoPlayer(
+                        file = file,
+                        withSound = videoSound,
+                        loop = items.size == 1 && !finishAtEnd,
+                        manualRotation = rotationOf(file),
+                        autoRotate = autoRotate,
+                        isPaused = paused,
+                        onError = {
+                            errorStreak++
+                            if (errorStreak >= 3 || !file.exists()) onSourceLost() else next()
+                        }
+                    ) { errorStreak = 0; next() }
+                }
             } else {
                 ZoomImage(
                     file = file,
@@ -130,13 +200,42 @@ fun SlideshowScreen(
                     faceZoom = faceZoom,
                     zoomMax = zoomMaxPercent / 100f,
                     speedFraction = zoomSpeedPercent / 100f,
+                    isPaused = paused
                 )
             }
         }
+
+        if (showFileName || formattedDate != null) {
+            val scale = textSizePercent / 100f
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                if (formattedDate != null) {
+                    Text(
+                        text = formattedDate,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = (22 * scale).sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                if (showFileName) {
+                    Text(
+                        text = current.name,
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = (16 * scale).sp,
+                        modifier = Modifier.padding(top = (4 * scale).dp)
+                    )
+                }
+            }
+        }
+
         if (labelVisible) {
             Text(
-                text = "♪ $audioLabel   ·   Menü-Taste: Einstellungen" +
-                    if (isVideo) "   ·   ⏪ ⏩ Drehung korrigieren" else "",
+                text = "♪ $audioLabel   ·   Menü: Einstellungen" +
+                        if (isVideo) "   ·   ⏪ ⏩ Drehung" else "",
                 color = Color.White,
                 modifier = Modifier.align(Alignment.BottomStart).padding(32.dp)
             )
@@ -152,7 +251,7 @@ fun SlideshowScreen(
             Text(
                 text = "Pause",
                 color = Color.White,
-                modifier = Modifier.align(Alignment.TopEnd).padding(32.dp)
+                modifier = Modifier.align(Alignment.TopStart).padding(32.dp)
             )
         }
     }
@@ -165,15 +264,16 @@ private fun VideoPlayer(
     loop: Boolean,
     manualRotation: Int,
     autoRotate: Boolean,
+    isPaused: Boolean,
+    onError: () -> Unit,
     onEnded: () -> Unit,
 ) {
-    // Die in der Datei gespeicherte Drehung wird gelesen, bevor das Video startet
     val tag by produceState<Int?>(if (autoRotate) null else 0, file, autoRotate) {
         value = if (autoRotate) withContext(Dispatchers.IO) { VideoRotation.readTag(file) } else 0
     }
     val t = tag
     if (t != null) {
-        VideoPlayerContent(file, withSound, loop, (t + manualRotation) % 360, autoRotate, onEnded)
+        VideoPlayerContent(file, withSound, loop, (t + manualRotation) % 360, autoRotate, isPaused, onError, onEnded)
     }
 }
 
@@ -184,6 +284,8 @@ private fun VideoPlayerContent(
     loop: Boolean,
     rotation: Int,
     autoRotate: Boolean,
+    isPaused: Boolean,
+    onError: () -> Unit,
     onEnded: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -198,6 +300,11 @@ private fun VideoPlayerContent(
             playWhenReady = true
         }
     }
+
+    LaunchedEffect(isPaused) {
+        player.playWhenReady = !isPaused
+    }
+
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -206,7 +313,7 @@ private fun VideoPlayerContent(
             override fun onVideoSizeChanged(size: VideoSize) {
                 videoSize = size
             }
-            override fun onPlayerError(error: PlaybackException) = onEnded()
+            override fun onPlayerError(error: PlaybackException) = onError()
         }
         player.addListener(listener)
         onDispose {
@@ -215,7 +322,6 @@ private fun VideoPlayerContent(
         }
     }
 
-    // Ohne Drehung: schnelle SurfaceView. Mit Drehung: TextureView, die sich transformieren lässt.
     val useTexture = rotation != 0
     key(useTexture) {
         AndroidView(
@@ -224,7 +330,6 @@ private fun VideoPlayerContent(
                 .graphicsLayer {
                     rotationZ = rotation.toFloat()
                     if (rotation % 180 != 0) {
-                        // Bei 90°/270° so skalieren, dass das gedrehte Video genau in den Bildschirm passt
                         val w = size.width
                         val h = size.height
                         val vs = videoSize
@@ -250,4 +355,126 @@ private fun VideoPlayerContent(
             update = { it.player = player }
         )
     }
+}
+
+/** Spezial-Player für AVI-Dateien mit ParcelFileDescriptor zur Umgehung von USB-Berechtigungsproblemen */
+@Composable
+private fun LegacyAviPlayer(
+    file: File,
+    withSound: Boolean,
+    loop: Boolean,
+    rotation: Int,
+    isPaused: Boolean,
+    onError: () -> Unit,
+    onEnded: () -> Unit
+) {
+    val context = LocalContext.current
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
+    var mediaPlayerFailed by remember { mutableStateOf(false) }
+
+    if (mediaPlayerFailed) {
+        // Falls der MediaPlayer fehlschlägt, versuchen wir ExoPlayer ohne Rotations-Wrapper
+        VideoPlayer(
+            file = file,
+            withSound = withSound,
+            loop = loop,
+            manualRotation = rotation,
+            autoRotate = false,
+            isPaused = isPaused,
+            onError = onError,
+            onEnded = onEnded
+        )
+        return
+    }
+
+    val mediaPlayer = remember(file) {
+        try {
+            val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            MediaPlayer().apply {
+                setDataSource(pfd.fileDescriptor)
+                pfd.close()
+                val vol = if (withSound) 1f else 0f
+                setVolume(vol, vol)
+                isLooping = loop
+                setOnCompletionListener { onEnded() }
+                setOnErrorListener { _, _, _ ->
+                    mediaPlayerFailed = true
+                    true
+                }
+                setOnVideoSizeChangedListener { _, w, h ->
+                    videoWidth = w
+                    videoHeight = h
+                }
+                setOnPreparedListener { mp ->
+                    if (!isPaused) mp.start()
+                }
+                prepareAsync()
+            }
+        } catch (e: Exception) {
+            mediaPlayerFailed = true
+            null
+        }
+    }
+
+    LaunchedEffect(isPaused, mediaPlayer) {
+        val mp = mediaPlayer ?: return@LaunchedEffect
+        try {
+            if (isPaused) {
+                if (mp.isPlaying) mp.pause()
+            } else {
+                if (videoWidth > 0 && !mp.isPlaying) mp.start()
+            }
+        } catch (e: Exception) { }
+    }
+
+    DisposableEffect(mediaPlayer) {
+        onDispose {
+            mediaPlayer?.let { mp ->
+                try {
+                    if (mp.isPlaying) mp.stop()
+                    mp.release()
+                } catch (e: Exception) { }
+            }
+        }
+    }
+
+    AndroidView(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                rotationZ = rotation.toFloat()
+                if (rotation % 180 != 0 && videoWidth > 0 && videoHeight > 0) {
+                    val w = size.width
+                    val h = size.height
+                    val f = minOf(w / videoWidth, h / videoHeight)
+                    val fw = videoWidth * f
+                    val fh = videoHeight * f
+                    val s = minOf(w / fh, h / fw)
+                    scaleX = s
+                    scaleY = s
+                }
+            },
+        factory = { ctx ->
+            TextureView(ctx).apply {
+                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                        try {
+                            mediaPlayer?.setSurface(Surface(surface))
+                        } catch (e: Exception) {
+                            mediaPlayerFailed = true
+                        }
+                    }
+                    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+                    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                        try {
+                            mediaPlayer?.setSurface(null)
+                        } catch (e: Exception) { }
+                        return true
+                    }
+                    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                }
+            }
+        }
+    )
 }

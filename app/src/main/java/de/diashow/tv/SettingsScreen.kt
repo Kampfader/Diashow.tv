@@ -124,6 +124,23 @@ fun SettingsScreen(
             }
         }
 
+        item { Header("Einblendungen") }
+        item {
+            SettingRow("Dateiname anzeigen", onOff(settings.showFileName)) {
+                onChange(settings.copy(showFileName = !settings.showFileName))
+            }
+        }
+        item {
+            SettingRow("Aufnahmedatum anzeigen", onOff(settings.showDate)) {
+                onChange(settings.copy(showDate = !settings.showDate))
+            }
+        }
+        item {
+            SettingRow("Schriftgröße der Einblendungen", "${settings.textSizePercent} %") {
+                onChange(settings.copy(textSizePercent = next(TEXT_SIZE_OPTIONS, settings.textSizePercent)))
+            }
+        }
+
         item { Header("Videos") }
         item {
             SettingRow("Reihenfolge der Videos", if (settings.shuffleVideos) "Zufällig" else "Nach Ordner und Name") {

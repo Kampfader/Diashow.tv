@@ -1,6 +1,10 @@
 package de.diashow.tv
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
@@ -12,14 +16,24 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -27,6 +41,13 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     private lateinit var audio: AudioController
     private var showSettings by mutableStateOf(false)
+    private var usbEvent by mutableIntStateOf(0)
+
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            usbEvent++
+        }
+    }
 
     private fun hasPermission() = ContextCompat.checkSelfPermission(
         this, Manifest.permission.READ_EXTERNAL_STORAGE
@@ -36,6 +57,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         audio = AudioController(this)
+
+        try {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_MEDIA_EJECT)
+                addAction(Intent.ACTION_MEDIA_UNMOUNTED)
+                addAction(Intent.ACTION_MEDIA_REMOVED)
+                addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
+                addDataScheme("file")
+            }
+            ContextCompat.registerReceiver(this, usbReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        } catch (e: Exception) {
+        }
 
         setContent {
             val store = remember { SettingsStore(this@MainActivity) }
@@ -50,6 +83,7 @@ class MainActivity : ComponentActivity() {
 
             var library by remember { mutableStateOf<MediaScanner.Library?>(null) }
             var status by remember { mutableStateOf("Suche USB-Stick …") }
+            var isScanning by remember { mutableStateOf(true) }
             var duck by remember { mutableStateOf(false) }
             var playMode by remember { mutableStateOf<PlayMode?>(null) }
             var slideIndex by remember { mutableIntStateOf(0) }
@@ -59,42 +93,79 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 if (!granted) launcher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
-            // Prüft alle paar Sekunden, ob ein USB-Stick entfernt, eingesteckt oder gewechselt wurde
+
             LaunchedEffect(granted) {
-                if (!granted) { status = "Speicherberechtigung fehlt"; return@LaunchedEffect }
+                if (!granted) {
+                    status = "Speicherberechtigung fehlt"
+                    isScanning = false
+                    return@LaunchedEffect
+                }
                 var lastSignature: String? = null
                 while (true) {
-                    val roots = withContext(Dispatchers.IO) { MediaScanner.findUsbRoots(this@MainActivity) }
-                    val signature = withContext(Dispatchers.IO) { MediaScanner.signature(roots) }
-                    if (signature != lastSignature) {
-                        val isChange = lastSignature != null
-                        lastSignature = signature
+                    try {
+                        val roots = withContext(Dispatchers.IO) { MediaScanner.findUsbRoots(this@MainActivity) }
+                        val signature = withContext(Dispatchers.IO) { MediaScanner.signature(roots) }
+                        if (signature != lastSignature) {
+                            val isChange = lastSignature != null
 
-                        val lib = withContext(Dispatchers.IO) {
-                            roots.map { MediaScanner.scan(it) }.firstOrNull { it.visual.isNotEmpty() }
+                            if (roots.isNotEmpty()) {
+                                isScanning = true
+                                status = "Durchsuche USB-Stick nach Bildern und Videos …"
+                            } else {
+                                isScanning = true
+                                status = "Suche USB-Stick …"
+                            }
+
+                            val lib = withContext(Dispatchers.IO) {
+                                roots.map { MediaScanner.scan(it) }.firstOrNull { it.visual.isNotEmpty() }
+                            }
+
+                            if (playMode != null) audio.stop()
+                            playMode = null
+                            slideIndex = 0
+                            startInfo = if (isChange && lib != null) {
+                                "USB-Stick gewechselt. Die Medien wurden neu geladen."
+                            } else null
+
+                            when {
+                                roots.isEmpty() -> {
+                                    library = null
+                                    isScanning = true
+                                    status = "Suche USB-Stick …\nBitte einen Stick einstecken, die App erkennt ihn automatisch."
+                                }
+                                lib == null -> {
+                                    library = null
+                                    isScanning = false
+                                    status = "Keine Bilder oder Videos gefunden in:\n" +
+                                            roots.joinToString("\n") { it.absolutePath }
+                                }
+                                else -> {
+                                    library = lib
+                                    isScanning = false
+                                }
+                            }
+                            lastSignature = signature
                         }
-
-                        // Alter Stand gehört zum alten Stick: Diashow beenden, Position zurücksetzen
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        audio.stop()
                         playMode = null
-                        slideIndex = 0
-                        startInfo = if (isChange && lib != null) {
-                            "USB-Stick gewechselt. Die Medien wurden neu geladen."
-                        } else null
-
-                        when {
-                            roots.isEmpty() -> {
-                                library = null
-                                status = "Kein USB-Stick gefunden.\nBitte einen Stick einstecken, die App erkennt ihn automatisch."
-                            }
-                            lib == null -> {
-                                library = null
-                                status = "Keine Bilder oder Videos gefunden in:\n" +
-                                    roots.joinToString("\n") { it.absolutePath }
-                            }
-                            else -> library = lib
-                        }
+                        library = null
+                        isScanning = true
+                        status = "USB-Stick wird getrennt …"
                     }
-                    delay(3000)
+                    delay(1500)
+                }
+            }
+
+            LaunchedEffect(usbEvent) {
+                if (usbEvent > 0) {
+                    audio.stop()
+                    if (playMode != null) {
+                        startInfo = "USB-Stick wurde entfernt."
+                        playMode = null
+                    }
                 }
             }
 
@@ -105,7 +176,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Lautstärke getrennt, damit die Musik dabei nicht neu startet
             LaunchedEffect(settings.musicVolumePercent, duck) {
                 audio.setVolume(if (duck) 0f else settings.musicVolumePercent / 100f)
             }
@@ -115,7 +185,6 @@ class MainActivity : ComponentActivity() {
 
             val lib = library
 
-            // Ordner-Übersicht für den Startbildschirm
             val folderInfos = remember(lib) {
                 lib?.visual.orEmpty()
                     .groupBy { it.parentFile?.absolutePath ?: "" }
@@ -126,13 +195,10 @@ class MainActivity : ComponentActivity() {
                     .sortedBy { it.path.lowercase() }
             }
 
-            // Dateien aus den ausgewählten Ordnern
             val selected = remember(lib, settings.disabledFolders) {
                 lib?.visual.orEmpty().filter { (it.parentFile?.absolutePath ?: "") !in settings.disabledFolders }
             }
 
-            // Bilder, die in den letzten Tagen schon gezeigt wurden. Wird nur beim Wechsel zwischen
-            // Startbildschirm und Diashow neu gelesen, damit sich die Liste während der Show nicht ändert.
             val recent = remember(lib, settings.noRepeatDays, playMode, historyReset) {
                 if (settings.noRepeatDays > 0) shownStore.recentPaths(settings.noRepeatDays) else emptySet()
             }
@@ -142,7 +208,6 @@ class MainActivity : ComponentActivity() {
             val imageCount = avail.count { !MediaScanner.isVideo(it) }
             val videoCount = avail.size - imageCount
 
-            // Wiedergabeliste je nach gewähltem Modus
             val items = remember(playMode, avail, settings.shuffleImages, settings.shuffleVideos) {
                 when (playMode) {
                     PlayMode.IMAGES -> avail.filter { !MediaScanner.isVideo(it) }
@@ -154,7 +219,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Musik läuft nur, solange die Diashow läuft (nicht auf dem Startbildschirm)
             val playing = playMode != null && items.isNotEmpty()
             LaunchedEffect(playing, sources, settings.audioSourceIndex, settings.musicEnabled, settings.shuffleMusic) {
                 if (playing && settings.musicEnabled && sources.isNotEmpty()) {
@@ -164,8 +228,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Zurück: Diashow -> Startbildschirm; Einstellungen -> schließen
-            // Im Hauptmenü: zweimal schnell Zurück drücken, um die App zu beenden
             var lastBackPress by remember { mutableLongStateOf(0L) }
             BackHandler(enabled = playMode != null && !showSettings) { playMode = null }
             BackHandler(enabled = showSettings) { showSettings = false }
@@ -183,7 +245,7 @@ class MainActivity : ComponentActivity() {
 
             when {
                 showSettings -> SettingsScreen(settings) { update(it) }
-                lib == null -> Message(status)
+                lib == null -> Message(text = status, showLoading = isScanning)
                 playMode == null || items.isEmpty() -> StartScreen(
                     folders = folderInfos,
                     disabled = settings.disabledFolders,
@@ -216,10 +278,18 @@ class MainActivity : ComponentActivity() {
                     faceZoom = settings.faceZoom,
                     zoomMaxPercent = settings.zoomMaxPercent,
                     zoomSpeedPercent = settings.zoomSpeedPercent,
+                    showFileName = settings.showFileName,
+                    showDate = settings.showDate,
+                    textSizePercent = settings.textSizePercent,
                     finishAtEnd = settings.noRepeatDays > 0 && playMode != PlayMode.VIDEOS,
                     onImageShown = { shownStore.markShown(it.absolutePath) },
                     onFinished = {
                         startInfo = "Alle Bilder wurden gezeigt. Die Diashow ist zu Ende."
+                        playMode = null
+                    },
+                    onSourceLost = {
+                        audio.stop()
+                        startInfo = "Die Medien sind nicht mehr erreichbar. Wurde der USB-Stick entfernt?"
                         playMode = null
                     },
                     audioLabel = if (settings.musicEnabled && sources.isNotEmpty())
@@ -236,9 +306,27 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Message(text: String) {
+    private fun Message(text: String, showLoading: Boolean) {
         Box(Modifier.fillMaxSize().background(Color.Black), Alignment.Center) {
-            Text(text, color = Color.White)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                if (showLoading) {
+                    CircularProgressIndicator(
+                        color = Color(0xFF7FB0FF),
+                        strokeWidth = 4.dp,
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+                Text(
+                    text = text,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 
@@ -251,6 +339,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(usbReceiver) } catch (e: Exception) { }
         audio.release()
         super.onDestroy()
     }

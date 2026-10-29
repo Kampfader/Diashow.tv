@@ -4,7 +4,6 @@ data class RadioStation(val name: String, val url: String)
 
 val radioStations = listOf(
     RadioStation("Dorognoe Radio", "https://dorognoe.hostingradio.ru:8000/dorognoe"),
-    // Alternativen, falls der Stream oben nicht läuft (URL oben ersetzen):
-    // "https://dorognoe.hostingradio.ru:8000/radio"               (256 kbit/s)
-    // "http://emgregion.hostingradio.ru:8064/moscow.dorognoe.mp3" (320 kbit/s)
+    RadioStation("SomaFM – Drone Zone", "http://ice1.somafm.com/dronezone-128-mp3"),
+    RadioStation("Classical Pan Flute", "https://0nlineradio.stream39.radiohost.de/classical-classical-pan-flute?upd-meta&upd-scheme=https&_art=dD0xNzkzMjkzODE1JmQ9YmJkZDkwN2UyZjA4YjVkNTlkMmE")
 )

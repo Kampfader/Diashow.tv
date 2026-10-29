@@ -52,6 +52,13 @@ object MediaScanner {
         return roots.filter { it.absolutePath != primary && !it.absolutePath.startsWith("$primary/") }
     }
 
+    /**
+     * Kurzer Fingerabdruck der gefundenen Sticks (Pfad + Anzahl der Einträge im Hauptordner).
+     * Ändert er sich, wurde ein Stick entfernt, eingesteckt oder gewechselt.
+     */
+    fun signature(roots: List<File>): String =
+        roots.joinToString(";") { r -> "${r.absolutePath}|${r.listFiles()?.size ?: -1}" }
+
     /** Durchsucht den Stick rekursiv. Bilder und Videos bleiben nach Ordner/Name sortiert zusammen. */
     fun scan(root: File): Library {
         val visual = mutableListOf<File>()

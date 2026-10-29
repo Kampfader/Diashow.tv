@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -57,17 +59,42 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 if (!granted) launcher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
+            // Prüft alle paar Sekunden, ob ein USB-Stick entfernt, eingesteckt oder gewechselt wurde
             LaunchedEffect(granted) {
                 if (!granted) { status = "Speicherberechtigung fehlt"; return@LaunchedEffect }
-                val roots = withContext(Dispatchers.IO) { MediaScanner.findUsbRoots(this@MainActivity) }
-                val lib = withContext(Dispatchers.IO) {
-                    roots.map { MediaScanner.scan(it) }.firstOrNull { it.visual.isNotEmpty() }
-                }
-                when {
-                    roots.isEmpty() -> status = "Kein USB-Stick gefunden"
-                    lib == null -> status = "Keine Bilder oder Videos gefunden in:\n" +
-                        roots.joinToString("\n") { it.absolutePath }
-                    else -> library = lib
+                var lastSignature: String? = null
+                while (true) {
+                    val roots = withContext(Dispatchers.IO) { MediaScanner.findUsbRoots(this@MainActivity) }
+                    val signature = withContext(Dispatchers.IO) { MediaScanner.signature(roots) }
+                    if (signature != lastSignature) {
+                        val isChange = lastSignature != null
+                        lastSignature = signature
+
+                        val lib = withContext(Dispatchers.IO) {
+                            roots.map { MediaScanner.scan(it) }.firstOrNull { it.visual.isNotEmpty() }
+                        }
+
+                        // Alter Stand gehört zum alten Stick: Diashow beenden, Position zurücksetzen
+                        playMode = null
+                        slideIndex = 0
+                        startInfo = if (isChange && lib != null) {
+                            "USB-Stick gewechselt. Die Medien wurden neu geladen."
+                        } else null
+
+                        when {
+                            roots.isEmpty() -> {
+                                library = null
+                                status = "Kein USB-Stick gefunden.\nBitte einen Stick einstecken, die App erkennt ihn automatisch."
+                            }
+                            lib == null -> {
+                                library = null
+                                status = "Keine Bilder oder Videos gefunden in:\n" +
+                                    roots.joinToString("\n") { it.absolutePath }
+                            }
+                            else -> library = lib
+                        }
+                    }
+                    delay(3000)
                 }
             }
 
@@ -138,8 +165,21 @@ class MainActivity : ComponentActivity() {
             }
 
             // Zurück: Diashow -> Startbildschirm; Einstellungen -> schließen
+            // Im Hauptmenü: zweimal schnell Zurück drücken, um die App zu beenden
+            var lastBackPress by remember { mutableLongStateOf(0L) }
             BackHandler(enabled = playMode != null && !showSettings) { playMode = null }
             BackHandler(enabled = showSettings) { showSettings = false }
+            BackHandler(enabled = playMode == null && !showSettings) {
+                val now = System.currentTimeMillis()
+                if (now - lastBackPress < 2500) {
+                    this@MainActivity.finish()
+                } else {
+                    lastBackPress = now
+                    Toast.makeText(
+                        this@MainActivity, "Zurück-Taste noch einmal drücken zum Beenden", Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
 
             when {
                 showSettings -> SettingsScreen(settings) { update(it) }
